@@ -26,7 +26,7 @@ ENVIRONMENT:
       MIN_DEPTH: 0.5
       MAX_DEPTH: 5.0
       POSITION: [0, 0.88, 0]
-    SCENE_DATASET: "data/scene_datasets/hm3d/hm3d_example_basis.scene_dataset_config.json"
+    SCENE_DATASET: "/home/edward/Projects/test/habitat/data/scene_datasets/hm3d/hm3d_example_basis.scene_dataset_config.json"
   TASK:
     TYPE: ObjectNav-v1
     SENSOR: ["OBJECTGOAL_SENSOR", "GPS_SENSOR", "COMPASS_SENSOR"]
