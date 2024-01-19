@@ -21,9 +21,10 @@ from argparse import Namespace
 import envs.utils.rotation_utils as ru
 import numpy as np
 import torch
+from torch import Tensor
 
 
-def get_camera_matrix(width, height, fov):
+def get_camera_matrix(width: int, height: int, fov: int) -> Namespace:
     """Returns a camera matrix from image size and fov."""
     xc = (width - 1.0) / 2.0
     zc = (height - 1.0) / 2.0
@@ -68,7 +69,9 @@ def transform_camera_view(XYZ, sensor_height, camera_elevation_degree):
     Output:
         XYZ : ...x3
     """
-    R = ru.get_r_matrix([1.0, 0.0, 0.0], angle=np.deg2rad(camera_elevation_degree))
+    R = ru.get_r_matrix(
+        np.asarray([1.0, 0.0, 0.0]), angle=np.deg2rad(camera_elevation_degree)
+    )
     XYZ = np.matmul(XYZ.reshape(-1, 3), R.T).reshape(XYZ.shape)
     XYZ[..., 2] = XYZ[..., 2] + sensor_height
     return XYZ
@@ -84,7 +87,9 @@ def transform_pose(XYZ, current_pose):
     Output:
         XYZ : ...x3
     """
-    R = ru.get_r_matrix([0.0, 0.0, 1.0], angle=current_pose[2] - np.pi / 2.0)
+    R = ru.get_r_matrix(
+        np.asarray([0.0, 0.0, 1.0]), angle=current_pose[2] - np.pi / 2.0
+    )
     XYZ = np.matmul(XYZ.reshape(-1, 3), R.T).reshape(XYZ.shape)
     XYZ[:, :, 0] = XYZ[:, :, 0] + current_pose[0]
     XYZ[:, :, 1] = XYZ[:, :, 1] + current_pose[1]
@@ -99,7 +104,7 @@ def bin_points(XYZ_cms, map_size, z_bins, xy_resolution):
     sh = XYZ_cms.shape
     XYZ_cms = XYZ_cms.reshape([-1, sh[-3], sh[-2], sh[-1]])
     n_z_bins = len(z_bins) + 1
-    counts = []
+    counts = np.asarray([])
     for XYZ_cm in XYZ_cms:
         isnotnan = np.logical_not(np.isnan(XYZ_cm[:, :, 0]))
         X_bin = np.round(XYZ_cm[:, :, 0] / xy_resolution).astype(np.int32)
@@ -192,7 +197,9 @@ def bin_semantic_points(XYZ_cms, semantic, map_size, semantic_map_len, xy_resolu
     return counts
 
 
-def get_point_cloud_from_z_t(Y_t, camera_matrix, device, scale=1):
+def get_point_cloud_from_z_t(
+    Y_t: Tensor, camera_matrix: Namespace, device: str, scale: int = 1
+) -> Tensor:
     """Projects the depth image Y into a 3D point cloud.
     Inputs:
         Y is ...xHxW
@@ -227,7 +234,12 @@ def get_point_cloud_from_z_t(Y_t, camera_matrix, device, scale=1):
     return XYZ
 
 
-def transform_camera_view_t(XYZ, sensor_height, camera_elevation_degree, device):
+def transform_camera_view_t(
+    XYZ: Tensor,
+    sensor_height: int,
+    camera_elevation_degree: Tensor,
+    device: str,
+) -> Tensor:
     """
     Transforms the point cloud into geocentric frame to account for
     camera elevation and angle
@@ -240,7 +252,7 @@ def transform_camera_view_t(XYZ, sensor_height, camera_elevation_degree, device)
     """
     for i in range(XYZ.shape[0]):
         R = ru.get_r_matrix(
-            [1.0, 0.0, 0.0], angle=np.deg2rad(camera_elevation_degree[i])
+            np.asarray([1.0, 0.0, 0.0]), angle=np.deg2rad(camera_elevation_degree[i])
         )
         XYZ[i] = torch.matmul(
             XYZ[i], torch.from_numpy(R).float().transpose(1, 0).to(device)
@@ -249,7 +261,7 @@ def transform_camera_view_t(XYZ, sensor_height, camera_elevation_degree, device)
     return XYZ
 
 
-def transform_pose_t(XYZ, current_pose, device):
+def transform_pose_t(XYZ: Tensor, current_pose: Tensor, device: str) -> Tensor:
     """
     Transforms the point cloud into geocentric frame to account for
     camera position
@@ -259,7 +271,9 @@ def transform_pose_t(XYZ, current_pose, device):
     Output:
         XYZ : ...x3
     """
-    R = ru.get_r_matrix([0.0, 0.0, 1.0], angle=current_pose[2] - np.pi / 2.0)
+    R = ru.get_r_matrix(
+        np.asarray([0.0, 0.0, 1.0]), angle=current_pose[2] - np.pi / 2.0
+    )
     XYZ = torch.matmul(
         XYZ.reshape(-1, 3), torch.from_numpy(R).float().transpose(1, 0).to(device)
     ).reshape(XYZ.shape)
@@ -268,7 +282,7 @@ def transform_pose_t(XYZ, current_pose, device):
     return XYZ
 
 
-def splat_feat_nd(init_grid, feat, coords):
+def splat_feat_nd(init_grid: Tensor, feat: Tensor, coords: Tensor) -> Tensor:
     """
     Args:
         init_grid: B X nF X W X H X D X ..
@@ -309,7 +323,7 @@ def splat_feat_nd(init_grid, feat, coords):
         pos_dim.append(pos_d)
         wts_dim.append(wts_d)
 
-    l_ix = [[0, 1] for d in range(n_dims)]
+    l_ix = [[0, 1] for _ in range(n_dims)]
 
     for ix_d in itertools.product(*l_ix):
         wts = torch.ones_like(wts_dim[0][0])

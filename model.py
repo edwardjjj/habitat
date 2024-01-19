@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
+from torch import Tensor
 from torch.nn import functional as F
 
 import envs.utils.depth_utils as du
@@ -69,7 +70,14 @@ class Semantic_Mapping(nn.Module):
         self.stair_mask_radius = 30
         self.stair_mask = self.get_mask(self.stair_mask_radius).to(self.device)
 
-    def forward(self, obs, pose_obs, maps_last, poses_last, eve_angle):
+    def forward(
+        self,
+        obs: Tensor,
+        pose_obs: Tensor,
+        maps_last: Tensor,
+        poses_last: Tensor,
+        eve_angle: Tensor,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
         bs, c, h, w = obs.size()
         depth = obs[:, 3, :, :]
 
