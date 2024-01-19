@@ -3,7 +3,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 habitat-lab/
-data/datasets/
+data/datasets/onjectnav/hm3d/
+*.zip
 
 # C extensions
 *.so
