@@ -1,0 +1,17 @@
+defaults:
+  - base_environment
+
+frame_height: 480
+frame_width: 640
+frame_height_downscale: 120
+frame_width_downscale: 160
+max_episode_length: 500
+camera_height_meter: 0.88
+field_of_view: 79.0
+turn_angle: 30
+min_depth: 0.5
+max_depth: 5.0
+success_dist: 1.0
+floor_threshold: 50
+min_dis_to_goal: 1.5
+max_dis_to_goal: 100
