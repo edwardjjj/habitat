@@ -17,11 +17,13 @@
 """
 import itertools
 from argparse import Namespace
+from typing import List
 
-import envs.utils.rotation_utils as ru
 import numpy as np
 import torch
 from torch import Tensor
+
+import envs.utils.rotation_utils as ru
 
 
 def get_camera_matrix(width: int, height: int, fov: int) -> Namespace:
@@ -237,7 +239,7 @@ def get_point_cloud_from_z_t(
 def transform_camera_view_t(
     XYZ: Tensor,
     sensor_height: int,
-    camera_elevation_degree: Tensor,
+    camera_elevation_degree: np.ndarray,
     device: str,
 ) -> Tensor:
     """
@@ -261,7 +263,7 @@ def transform_camera_view_t(
     return XYZ
 
 
-def transform_pose_t(XYZ: Tensor, current_pose: Tensor, device: str) -> Tensor:
+def transform_pose_t(XYZ: Tensor, current_pose: List[float], device: str) -> Tensor:
     """
     Transforms the point cloud into geocentric frame to account for
     camera position

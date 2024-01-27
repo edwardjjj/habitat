@@ -76,7 +76,7 @@ class Semantic_Mapping(nn.Module):
         pose_obs: Tensor,
         maps_last: Tensor,
         poses_last: Tensor,
-        eve_angle: Tensor,
+        eve_angle: np.ndarray,
     ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
         bs, c, h, w = obs.size()
         depth = obs[:, 3, :, :]
@@ -93,11 +93,13 @@ class Semantic_Mapping(nn.Module):
             agent_view_t, self.shift_loc, self.device
         )
 
+        # normalize point_cloud
         max_h = self.max_height
         min_h = self.min_height
         xy_resolution = self.resolution
         z_resolution = self.z_resolution
         vision_range = self.vision_range
+
         XYZ_cm_std = agent_view_centered_t.float()
         XYZ_cm_std[..., :2] = XYZ_cm_std[..., :2] / xy_resolution
         XYZ_cm_std[..., :2] = (
@@ -107,10 +109,6 @@ class Semantic_Mapping(nn.Module):
         XYZ_cm_std[..., 2] = (
             (XYZ_cm_std[..., 2] - (max_h + min_h) // 2.0) / (max_h - min_h) * 2.0
         )
-        self.feat[:, 1:, :] = nn.AvgPool2d(self.du_scale)(obs[:, 4:, :, :]).view(
-            bs, c - 4, h // self.du_scale * w // self.du_scale
-        )
-
         XYZ_cm_std = XYZ_cm_std.permute(0, 3, 1, 2)
         XYZ_cm_std = XYZ_cm_std.view(
             XYZ_cm_std.shape[0],
@@ -118,29 +116,42 @@ class Semantic_Mapping(nn.Module):
             XYZ_cm_std.shape[2] * XYZ_cm_std.shape[3],
         )
 
+        self.feat[:, 1:, :] = nn.AvgPool2d(self.du_scale)(obs[:, 4:, :, :]).view(
+            bs, c - 4, h // self.du_scale * w // self.du_scale
+        )
+
+        # build voxel grids from point_cloud and splat semantic category labels onto voxel grids
         voxels = du.splat_feat_nd(
             self.init_grid * 0.0, self.feat, XYZ_cm_std
         ).transpose(2, 3)
 
+        # ----------------------------------------------------------------------
+        # Project voxel grids onto 2D grids to create Maps
+        # ----------------------------------------------------------------------
         min_z = int(25 / z_resolution - min_h)
         max_z = int((self.agent_height + 50) / z_resolution - min_h)
         mid_z = int(self.agent_height / z_resolution - min_h)
 
-        agent_height_proj = voxels[..., min_z:max_z].sum(4)
-        agent_height_stair_proj = voxels[..., mid_z - 5 : mid_z].sum(4)
-        all_height_proj = voxels.sum(4)
+        agent_height_proj = voxel_to_grid(voxels[..., min_z:max_z])
+        agent_height_stair_proj = voxel_to_grid(voxels[..., mid_z - 5 : mid_z])
+        all_height_proj = voxel_to_grid(voxels)
 
+        # Obstacle Map
         fp_map_pred = agent_height_proj[:, 0:1, :, :]
-        fp_exp_pred = all_height_proj[:, 0:1, :, :]
-        fp_stair_pred = agent_height_stair_proj[:, 0:1, :, :]
         fp_map_pred = fp_map_pred / self.map_pred_threshold
-        fp_stair_pred = fp_stair_pred / self.map_pred_threshold
-        fp_exp_pred = fp_exp_pred / self.exp_pred_threshold
         fp_map_pred = torch.clamp(fp_map_pred, min=0.0, max=1.0)
-        fp_stair_pred = torch.clamp(fp_stair_pred, min=0.0, max=1.0)
+
+        # Explored Map
+        fp_exp_pred = all_height_proj[:, 0:1, :, :]
+        fp_exp_pred = fp_exp_pred / self.exp_pred_threshold
         fp_exp_pred = torch.clamp(fp_exp_pred, min=0.0, max=1.0)
 
-        pose_pred = poses_last
+        # Stairs Map
+        fp_stair_pred = agent_height_stair_proj[:, 0:1, :, :]
+        fp_stair_pred = fp_stair_pred / self.map_pred_threshold
+        fp_stair_pred = torch.clamp(fp_stair_pred, min=0.0, max=1.0)
+
+        # pose_pred = poses_last
 
         agent_view = torch.zeros(
             bs,
@@ -164,20 +175,6 @@ class Semantic_Mapping(nn.Module):
 
         corrected_pose = pose_obs
 
-        def get_new_pose_batch(pose, rel_pose_change):
-            pose[:, 1] += rel_pose_change[:, 0] * torch.sin(
-                pose[:, 2] / 57.29577951308232
-            ) + rel_pose_change[:, 1] * torch.cos(pose[:, 2] / 57.29577951308232)
-            pose[:, 0] += rel_pose_change[:, 0] * torch.cos(
-                pose[:, 2] / 57.29577951308232
-            ) - rel_pose_change[:, 1] * torch.sin(pose[:, 2] / 57.29577951308232)
-            pose[:, 2] += rel_pose_change[:, 2] * 57.29577951308232
-
-            pose[:, 2] = torch.fmod(pose[:, 2] - 180.0, 360.0) + 180.0
-            pose[:, 2] = torch.fmod(pose[:, 2] + 180.0, 360.0) - 180.0
-
-            return pose
-
         current_poses = get_new_pose_batch(poses_last, corrected_pose)
         st_pose = current_poses.clone().detach()
 
@@ -187,7 +184,7 @@ class Semantic_Mapping(nn.Module):
         ) / (self.map_size_cm // (self.resolution * 2))
         st_pose[:, 2] = 90.0 - (st_pose[:, 2])
 
-        rot_mat, trans_mat = get_grid(st_pose, agent_view.size(), self.device)
+        rot_mat, trans_mat = get_grid(st_pose, agent_view.shape, self.device)
 
         rotated = F.grid_sample(agent_view, rot_mat, align_corners=True)
         translated = F.grid_sample(rotated, trans_mat, align_corners=True)
@@ -209,7 +206,7 @@ class Semantic_Mapping(nn.Module):
 
         # stairs view
         rot_mat_stair, trans_mat_stair = get_grid(
-            st_pose, agent_view_stair.size(), self.device
+            st_pose, agent_view_stair.shape, self.device
         )
 
         rotated_stair = F.grid_sample(
@@ -272,7 +269,7 @@ class Semantic_Mapping(nn.Module):
         return mask
 
 
-def get_grid(pose, grid_size, device):
+def get_grid(pose: Tensor, grid_size: torch.Size, device: str):
     """
     Input:
         `pose` FloatTensor(bs, 3)
@@ -309,7 +306,34 @@ def get_grid(pose, grid_size, device):
     )
     theta2 = torch.stack([theta21, theta22], 1)
 
-    rot_grid = F.affine_grid(theta1, torch.Size(grid_size))
-    trans_grid = F.affine_grid(theta2, torch.Size(grid_size))
+    rot_grid = F.affine_grid(theta1, grid_size)
+    trans_grid = F.affine_grid(theta2, grid_size)
 
     return rot_grid, trans_grid
+
+
+def voxel_to_grid(voxels: Tensor) -> Tensor:
+    """Create 2d projection of the voxels grid
+
+    Args:
+        voxels: (...X x Y x Z) the voxels grid
+
+    Returns:
+        (... X x Y) the 2d projection
+    """
+    return voxels.sum(-1)
+
+
+def get_new_pose_batch(pose, rel_pose_change):
+    pose[:, 1] += rel_pose_change[:, 0] * torch.sin(
+        pose[:, 2] / (180 / np.pi)
+    ) + rel_pose_change[:, 1] * torch.cos(pose[:, 2] / (180 / np.pi))
+    pose[:, 0] += rel_pose_change[:, 0] * torch.cos(
+        pose[:, 2] / (180 / np.pi)
+    ) - rel_pose_change[:, 1] * torch.sin(pose[:, 2] / (180 / np.pi))
+    pose[:, 2] += rel_pose_change[:, 2] * (180 / np.pi)
+
+    pose[:, 2] = torch.fmod(pose[:, 2] - 180.0, 360.0) + 180.0
+    pose[:, 2] = torch.fmod(pose[:, 2] + 180.0, 360.0) - 180.0
+
+    return pose
