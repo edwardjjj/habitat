@@ -4,7 +4,7 @@ import torch.nn as nn
 from torch import Tensor
 from torch.nn import functional as F
 
-import envs.utils.depth_utils as du
+import utils.depth_utils as du
 
 
 class Semantic_Mapping(nn.Module):
@@ -173,9 +173,9 @@ class Semantic_Mapping(nn.Module):
         agent_view_stair = agent_view.clone().detach()
         agent_view_stair[:, 0:1, y1:y2, x1:x2] = fp_stair_pred
 
-        corrected_pose = pose_obs
+        relative_pose_change = pose_obs
 
-        current_poses = get_new_pose_batch(poses_last, corrected_pose)
+        current_poses = get_new_pose_batch(poses_last, relative_pose_change)
         st_pose = current_poses.clone().detach()
 
         st_pose[:, :2] = -(
@@ -186,11 +186,18 @@ class Semantic_Mapping(nn.Module):
 
         rot_mat, trans_mat = get_grid(st_pose, agent_view.shape, self.device)
 
+        # rotate and transform the map to egocentric view
+
         rotated = F.grid_sample(agent_view, rot_mat, align_corners=True)
         translated = F.grid_sample(rotated, trans_mat, align_corners=True)
 
         # translated[:, 18:19, :, :] = -self.max_pool(-translated[:, 18:19, :, :])
 
+        # ----------------------------------------------------------------------
+        # Create a binary mask when explored map value is large and obstacle map
+        # value is small, so that when the camera elevation angle is 0, the masked
+        # value on hte obstacle map is set to 0
+        # ----------------------------------------------------------------------
         diff_ob_ex = translated[:, 1:2, :, :] - self.max_pool(translated[:, 0:1, :, :])
 
         diff_ob_ex[diff_ob_ex > 0.8] = 1.0
@@ -200,6 +207,7 @@ class Semantic_Mapping(nn.Module):
 
         map_pred, _ = torch.max(maps2, 1)
 
+        # when elevation angle is 0, make the masked value on obstacle map 0
         for i in range(eve_angle.shape[0]):
             if eve_angle[i] == 0:
                 map_pred[i, 0:1, :, :][diff_ob_ex[i] == 1.0] = 0.0
@@ -209,12 +217,18 @@ class Semantic_Mapping(nn.Module):
             st_pose, agent_view_stair.shape, self.device
         )
 
+        # rotate and transform the stair map to ergocentric view
+
         rotated_stair = F.grid_sample(
             agent_view_stair, rot_mat_stair, align_corners=True
         )
         translated_stair = F.grid_sample(
             rotated_stair, trans_mat_stair, align_corners=True
         )
+
+        # ----------------------------------------------------------------------
+        # create stairs map for environment tweaking, the effect is questionable
+        # ----------------------------------------------------------------------
 
         stair_mask = torch.zeros(
             self.map_size_cm // self.resolution, self.map_size_cm // self.resolution
@@ -269,15 +283,15 @@ class Semantic_Mapping(nn.Module):
         return mask
 
 
-def get_grid(pose: Tensor, grid_size: torch.Size, device: str):
+def get_grid(pose: Tensor, grid_size: torch.Size, device: torch.device):
     """
     Input:
-        `pose` FloatTensor(bs, 3)
-        `grid_size` 4-tuple (bs, _, grid_h, grid_w)
-        `device` torch.device (cpu or gpu)
+        pose: (bs, 3) (x, y, theta) theta is in degrees
+        grid_size: 4-tuple (bs, _, grid_h, grid_w)
+        device: torch.device (cpu or gpu)
     Output:
-        `rot_grid` FloatTensor(bs, grid_h, grid_w, 2)
-        `trans_grid` FloatTensor(bs, grid_h, grid_w, 2)
+        rot_grid: (bs, grid_h, grid_w, 2) rotation matrix
+        trans_grid: (bs, grid_h, grid_w, 2) transformation matrix
 
     """
     pose = pose.float()
@@ -286,6 +300,7 @@ def get_grid(pose: Tensor, grid_size: torch.Size, device: str):
     t = pose[:, 2]
 
     bs = x.size(0)
+    # convert t from degrees to radians
     t = t * np.pi / 180.0
     cos_t = t.cos()
     sin_t = t.sin()
