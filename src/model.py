@@ -4,7 +4,7 @@ import torch.nn as nn
 from torch import Tensor
 from torch.nn import functional as F
 
-import utils.depth_utils as du
+import image_processing.depth_utils as du
 
 
 class Semantic_Mapping(nn.Module):
