@@ -68,9 +68,6 @@ class ObjNavEnv(RLEnv):
         self.path_length = 1e-5
         self.last_sim_location = (0, 0, 0)
         self.info = {}
-        self.info["distance_to_goal"] = None
-        self.info["spl"] = None
-        self.info["success"] = None
 
         # create category dict
         fileName = Path("data/matterport_category_mappings.tsv")
@@ -93,7 +90,6 @@ class ObjNavEnv(RLEnv):
             info : contains timestep, pose, goal category and
                         evaluation metric info
         """
-        args = self.args
 
         self.episode_num += 1
 
@@ -152,7 +148,7 @@ class ObjNavEnv(RLEnv):
         return state, self.info
 
     def step(
-        self, action: Dict[str, int]
+        self, dict_action: Dict[str, int]
     ) -> Tuple[np.ndarray, float, bool, Dict[str, Any]]:
         """Function to take an action in the environment.
 
@@ -169,7 +165,7 @@ class ObjNavEnv(RLEnv):
                             evaluation metric info
         """
 
-        action = action["action"]
+        action = dict_action["action"]
         if action == 0:
             self.stopped = True
             # Not sending stop to simulator, resetting manually
@@ -182,7 +178,6 @@ class ObjNavEnv(RLEnv):
         self.info["sensor_pose"] = [dx, dy, do]
         self.path_length += get_l2_distance(0, dx, 0, dy)
 
-        spl, success, dist = 0.0, 0.0, 0.0
         if done:
             spl, success, dist = self.get_metrics()
             self.info["distance_to_goal"] = dist
@@ -238,20 +233,20 @@ class ObjNavEnv(RLEnv):
         self.prev_distance = self.curr_distance
         return reward
 
-    def get_metrics(self) -> Tuple[float, int, float]:
+    def get_metrics(self) -> Tuple[float, bool, float]:
         """This function computes evaluation metrics for the Object Goal task
 
         Returns:
             spl (float): Success weighted by Path Length
-            success (int): 0: Failure, 1: Successful
+            success (bool):  Success: True, Failure: Flase
             dist (float): Distance to Success (DTS),  distance of the agent
                         from the success threshold boundary in meters.
         """
         dist = self.habitat_env.get_metrics()["distance_to_goal"]
         if dist < 0.1:
-            success = 1
+            success = True
         else:
-            success = 0
+            success = False
         spl = min(success * self.starting_distance / self.path_length, 1)
         return spl, success, dist
 
