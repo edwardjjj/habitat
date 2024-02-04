@@ -35,7 +35,9 @@ class Semantic_Mapping(nn.Module):
         self.max_height = int(200 / self.z_resolution)
         self.min_height = int(-40 / self.z_resolution)
         self.agent_height = args.camera_height * 100.0
-        self.shift_loc = [self.vision_range * self.resolution // 2, 0, np.pi / 2.0]
+        self.shift_loc = np.asarray(
+            [self.vision_range * self.resolution // 2, 0, np.pi / 2.0]
+        )
         self.camera_matrix = du.get_camera_matrix(
             self.screen_w, self.screen_h, self.fov
         )
