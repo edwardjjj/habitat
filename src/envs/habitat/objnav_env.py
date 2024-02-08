@@ -1,9 +1,11 @@
-from typing import Any, Dict, Tuple
+from dataclasses import dataclass, field
 from pathlib import Path
-import quaternion
+from typing import Any, Dict, Tuple
 
 import numpy as np
-from habitat.core.env import RLEnv
+import quaternion
+
+import habitat
 
 target_category_to_id = [0, 3, 2, 4, 5, 1]
 target_id_to_category = ["chair", "bed", "plant", "toilet", "tv_monitor", "sofa"]
@@ -24,7 +26,18 @@ mp3d_category_id = {
 }
 
 
-class ObjNavEnv(RLEnv):
+@dataclass
+class EnvInfo:
+    distance_to_goal: float = 0.0
+    spl: float = 0.0
+    success: bool = False
+    timestep: int = 0
+    sensor_pose: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    goal_cat_id: int = 100
+    goal_name: str = ""
+
+
+class ObjNavEnv(habitat.RLEnv):
     rank: int
     episode_num: int
     curr_dis_to_goal: float
@@ -35,7 +48,7 @@ class ObjNavEnv(RLEnv):
     last_pose: Tuple[float, float, float]
     info: Dict[str, Any]
 
-    def __init__(self, args, rank, config_env, dataset):
+    def __init__(self, args, rank, config_env, dataset) -> None:
         self.args = args
         self.rank = rank
 
@@ -140,8 +153,12 @@ class ObjNavEnv(RLEnv):
         self.last_sim_location = self.get_agent_pose()
 
         # Set info
+        # self.info.timestep = self.timestep
+        # self.info.sensor_pose = np.zeros(3)
+        # self.info.goal_cat_id = target_category_to_id[obs["objectgoal"][0]]
+        # self.info.goal_name = target_id_to_category[obs["objectgoal"][0]]
         self.info["time"] = self.timestep
-        self.info["sensor_pose"] = [0.0, 0.0, 0.0]
+        self.info["sensor_pose"] = np.zeros(3)
         self.info["goal_cat_id"] = target_category_to_id[obs["objectgoal"][0]]
         self.info["goal_name"] = target_id_to_category[obs["objectgoal"][0]]
 
@@ -151,6 +168,9 @@ class ObjNavEnv(RLEnv):
         self, dict_action: Dict[str, int]
     ) -> Tuple[np.ndarray, float, bool, Dict[str, Any]]:
         """Function to take an action in the environment.
+
+
+
 
         Args:
             action (dict):
@@ -175,7 +195,7 @@ class ObjNavEnv(RLEnv):
 
         # Get pose change
         dx, dy, do = self.get_pose_change()
-        self.info["sensor_pose"] = [dx, dy, do]
+        self.info.sensor_pose = np.asarray([dx, dy, do])
         self.path_length += get_l2_distance(0, dx, 0, dy)
 
         if done:
@@ -194,7 +214,7 @@ class ObjNavEnv(RLEnv):
 
         return state, rew, done, self.info
 
-    def _preprocess_semantic(self, semantic):
+    def _preprocess_semantic(self, semantic: np.ndarray) -> np.ndarray:
         # list of unique semantic labels
         sem_category = list(set(semantic.ravel()))
         for item in sem_category:
