@@ -1,5 +1,6 @@
 defaults:
   - base_environment
+  - _self_
 
 frame_height: 480
 frame_width: 640

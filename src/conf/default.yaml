@@ -1,8 +1,9 @@
 defaults:
   - base_config
-  - _self_
   - environment: hm3d
   - agent: base_agent
+  - objectnav
+  - _self_
 
 general:
   seed: 1
@@ -60,7 +61,6 @@ path:
 visualize:
   visualize: False
   print_images: False
-
 
 data:
   version: "v1.0"
