@@ -16,10 +16,10 @@ habitat:
       main_agent:
         sim_sensors:
           rgb_sensor:
-              width: 640
-              height: 480
-              hfov: 79
-              position: [0, 0.88, 0]
+            width: 640
+            height: 480
+            hfov: 79
+            position: [0, 0.88, 0]
           depth_sensor:
             width: 640
             height: 480
@@ -37,3 +37,6 @@ habitat:
     habitat_sim_v0:
       gpu_device_id: 0
       allow_sliding: False
+  dataset:
+    scenes_dir: "../data/scene_datasets"
+    data_path: "../data/datasets/objectnav/hm3d/v1/{split}/{split}.json.gz"
