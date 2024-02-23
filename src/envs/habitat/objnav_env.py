@@ -1,11 +1,16 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import quaternion
+from omegaconf import DictConfig
 
-import habitat
+from habitat.core.dataset import Dataset, Episode
+from habitat.core.env import RLEnv
+from habitat.core.simulator import Observations
 
 target_category_to_id = [0, 3, 2, 4, 5, 1]
 target_id_to_category = ["chair", "bed", "plant", "toilet", "tv_monitor", "sofa"]
@@ -37,7 +42,7 @@ class EnvInfo:
     goal_name: str = ""
 
 
-class ObjNavEnv(habitat.RLEnv):
+class ObjNavEnv(RLEnv):
     rank: int
     episode_num: int
     curr_dis_to_goal: float
@@ -48,11 +53,15 @@ class ObjNavEnv(habitat.RLEnv):
     last_pose: Tuple[float, float, float]
     info: Dict[str, Any]
 
-    def __init__(self, args, rank, config_env, dataset) -> None:
-        self.args = args
+    def __init__(
+        self,
+        config: DictConfig,
+        rank: int,
+        dataset: Optional[Dataset[Episode]] = None,
+    ) -> None:
         self.rank = rank
-
-        super().__init__(config_env, dataset)
+        self.full_config = config
+        super().__init__(config, dataset)
 
         # Initializations
         self.episode_num = 0
@@ -80,10 +89,15 @@ class ObjNavEnv(habitat.RLEnv):
         self.stopped = False
         self.path_length = 1e-5
         self.last_sim_location = (0, 0, 0)
-        self.info = {}
+        self.info = {
+            "timestep": 0,
+            "sensor_pose": np.zeros(3),
+            "goal_cat_id": None,
+            "goal_name": None,
+        }
 
         # create category dict
-        fileName = Path("data/matterport_category_mappings.tsv")
+        fileName = Path("../data/matterport_category_mappings.tsv")
         lines = []
         self.hm3d_semantic_mapping = {}
 
@@ -95,7 +109,7 @@ class ObjNavEnv(habitat.RLEnv):
         for line in lines:
             self.hm3d_semantic_mapping[line[2]] = line[-1].strip()
 
-    def reset(self) -> Tuple[np.ndarray, Dict[str, Any]]:
+    def reset(self) -> Tuple[np.ndarray, Dict[str, Any]]:  # type: ignore[override]
         """Resets the environment to a new episode.
 
         Returns:
@@ -113,7 +127,7 @@ class ObjNavEnv(habitat.RLEnv):
         # self.trajectory_states = []
 
         # if new_scene:
-        obs = super().reset()
+        observations, _ = super().reset(return_info=True)
         self.scene = self.habitat_env.sim.semantic_annotations()
         # start_height = self._env.current_episode.start_position[1]
         # goal_height = self.scene.objects[self._env.current_episode.info['closest_goal_object_id']].aabb.center[1]
@@ -145,11 +159,14 @@ class ObjNavEnv(habitat.RLEnv):
         self.prev_distance = self.habitat_env.get_metrics()["distance_to_goal"]
         self.starting_distance = self.habitat_env.get_metrics()["distance_to_goal"]
 
-        rgb = obs["rgb"]
-        depth = obs["depth"]
-        semantic = self._preprocess_semantic(obs["semantic"])
+        rgb = observations["rgb"]
+        depth = observations["depth"]
+        semantic = observations["semantic"]
+        # semantic = self._preprocess_semantic(observations["semantic"])
 
-        state = np.concatenate((rgb, depth, semantic), axis=2).transpose(2, 0, 1)
+        np_observations = np.concatenate((rgb, depth, semantic), axis=2).transpose(
+            2, 0, 1
+        )
         self.last_sim_location = self.get_agent_pose()
 
         # Set info
@@ -157,14 +174,14 @@ class ObjNavEnv(habitat.RLEnv):
         # self.info.sensor_pose = np.zeros(3)
         # self.info.goal_cat_id = target_category_to_id[obs["objectgoal"][0]]
         # self.info.goal_name = target_id_to_category[obs["objectgoal"][0]]
-        self.info["time"] = self.timestep
+        self.info["timestep"] = self.timestep
         self.info["sensor_pose"] = np.zeros(3)
-        self.info["goal_cat_id"] = target_category_to_id[obs["objectgoal"][0]]
-        self.info["goal_name"] = target_id_to_category[obs["objectgoal"][0]]
+        self.info["goal_cat_id"] = target_category_to_id[observations["objectgoal"][0]]
+        self.info["goal_name"] = target_id_to_category[observations["objectgoal"][0]]
 
-        return state, self.info
+        return np_observations, self.info
 
-    def step(
+    def step(  # type: ignore[override]
         self, dict_action: Dict[str, int]
     ) -> Tuple[np.ndarray, float, bool, Dict[str, Any]]:
         """Function to take an action in the environment.
@@ -191,28 +208,24 @@ class ObjNavEnv(habitat.RLEnv):
             # Not sending stop to simulator, resetting manually
             action = 3
 
-        obs, rew, done, _ = super().step(action)
+        observations, reward, done, _ = super().step(action)
 
         # Get pose change
         dx, dy, do = self.get_pose_change()
-        self.info.sensor_pose = np.asarray([dx, dy, do])
+        self.info["sensor_pose"] = np.asarray([dx, dy, do])
         self.path_length += get_l2_distance(0, dx, 0, dy)
 
-        if done:
-            spl, success, dist = self.get_metrics()
-            self.info["distance_to_goal"] = dist
-            self.info["spl"] = spl
-            self.info["success"] = success
-
-        rgb = obs["rgb"].astype(np.uint8)
-        depth = obs["depth"]
-        semantic = self._preprocess_semantic(obs["semantic"])
-        state = np.concatenate((rgb, depth, semantic), axis=2).transpose(2, 0, 1)
+        rgb = observations["rgb"]
+        depth = observations["depth"]
+        semantic = self._preprocess_semantic(observations["semantic"])
+        np_observations = np.concatenate((rgb, depth, semantic), axis=2).transpose(
+            2, 0, 1
+        )
 
         self.timestep += 1
         self.info["time"] = self.timestep
 
-        return state, rew, done, self.info
+        return np_observations, reward, done, self.get_info(observations)
 
     def _preprocess_semantic(self, semantic: np.ndarray) -> np.ndarray:
         # list of unique semantic labels
@@ -237,7 +250,7 @@ class ObjNavEnv(habitat.RLEnv):
         """This function is not used, Habitat-RLEnv requires this function"""
         return 0.0, 1.0
 
-    def get_reward(self, observations: Any) -> float:
+    def get_reward(self, observations: Observations) -> float:
         """Return a dense reward based on distance to goal
 
         Args:
@@ -248,17 +261,19 @@ class ObjNavEnv(habitat.RLEnv):
         """
         self.curr_distance = self._env.get_metrics()["distance_to_goal"]
 
-        reward = (self.prev_distance - self.curr_distance) * self.args.reward_coeff
+        reward = (
+            self.prev_distance - self.curr_distance
+        ) * self.full_config.agent.intrinsic_reward_coeff
 
         self.prev_distance = self.curr_distance
         return reward
 
-    def get_metrics(self) -> Tuple[float, bool, float]:
+    def get_metrics(self) -> Tuple[bool, float, float]:
         """This function computes evaluation metrics for the Object Goal task
 
         Returns:
-            spl (float): Success weighted by Path Length
             success (bool):  Success: True, Failure: Flase
+            spl (float): Success weighted by Path Length
             dist (float): Distance to Success (DTS),  distance of the agent
                         from the success threshold boundary in meters.
         """
@@ -268,10 +283,10 @@ class ObjNavEnv(habitat.RLEnv):
         else:
             success = False
         spl = min(success * self.starting_distance / self.path_length, 1)
-        return spl, success, dist
+        return success, spl, dist
 
-    def get_done(self, observations: Any) -> bool:
-        if self.info["time"] >= self.args.max_episode_length - 1:
+    def get_done(self, observations: Observations) -> bool:
+        if self.info["time"] >= self.config.env.max_episode_length - 1:
             done = True
         elif self.stopped:
             done = True
@@ -279,7 +294,7 @@ class ObjNavEnv(habitat.RLEnv):
             done = False
         return done
 
-    def get_info(self, observations: Any) -> Dict:
+    def get_info(self, observations: Observations) -> Dict[str, Any]:
         return self.info
 
     def get_agent_pose(self) -> Tuple[float, float, float]:
