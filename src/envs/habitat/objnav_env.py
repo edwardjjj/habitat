@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, Union
 
 import numpy as np
 import quaternion
@@ -29,17 +29,6 @@ mp3d_category_id = {
     "stairs": 16,
     "fireplace": 12,
 }
-
-
-@dataclass
-class EnvInfo:
-    distance_to_goal: float = 0.0
-    spl: float = 0.0
-    success: bool = False
-    timestep: int = 0
-    sensor_pose: np.ndarray = field(default_factory=lambda: np.zeros(3))
-    goal_cat_id: int = 100
-    goal_name: str = ""
 
 
 class ObjNavEnv(RLEnv):
@@ -109,11 +98,15 @@ class ObjNavEnv(RLEnv):
         for line in lines:
             self.hm3d_semantic_mapping[line[2]] = line[-1].strip()
 
-    def reset(self) -> Tuple[np.ndarray, Dict[str, Any]]:  # type: ignore[override]
+    @property
+    def original_action_space(self):
+        return self._env.action_space
+
+    def reset(self) -> Tuple[np.ndarray, Dict]:  # type: ignore[override]
         """Resets the environment to a new episode.
 
         Returns:
-            obs : RGBD observations (4 x H x W)
+            obs : RGBDS observations (5 x H x W)
             info : contains timestep, pose, goal category and
                         evaluation metric info
         """
@@ -127,7 +120,7 @@ class ObjNavEnv(RLEnv):
         # self.trajectory_states = []
 
         # if new_scene:
-        observations, _ = super().reset(return_info=True)
+        observations = super().reset()
         self.scene = self.habitat_env.sim.semantic_annotations()
         # start_height = self._env.current_episode.start_position[1]
         # goal_height = self.scene.objects[self._env.current_episode.info['closest_goal_object_id']].aabb.center[1]
@@ -178,16 +171,13 @@ class ObjNavEnv(RLEnv):
         self.info["sensor_pose"] = np.zeros(3)
         self.info["goal_cat_id"] = target_category_to_id[observations["objectgoal"][0]]
         self.info["goal_name"] = target_id_to_category[observations["objectgoal"][0]]
-
         return np_observations, self.info
 
     def step(  # type: ignore[override]
-        self, dict_action: Dict[str, int]
+        self,
+        dict_action: Dict[str, int],
     ) -> Tuple[np.ndarray, float, bool, Dict[str, Any]]:
         """Function to take an action in the environment.
-
-
-
 
         Args:
             action (dict):
@@ -217,13 +207,14 @@ class ObjNavEnv(RLEnv):
 
         rgb = observations["rgb"]
         depth = observations["depth"]
-        semantic = self._preprocess_semantic(observations["semantic"])
+        semantic = observations["semantic"]
+        # semantic = self._preprocess_semantic(observations["semantic"])
         np_observations = np.concatenate((rgb, depth, semantic), axis=2).transpose(
             2, 0, 1
         )
 
         self.timestep += 1
-        self.info["time"] = self.timestep
+        self.info["timestep"] = self.timestep
 
         return np_observations, reward, done, self.get_info(observations)
 
@@ -243,14 +234,14 @@ class ObjNavEnv(RLEnv):
             else:
                 semantic[semantic == item] = 0
 
-        semantic = np.expand_dims(semantic.astype(np.uint8), 2)
-        return semantic.astype(np.uint8)
+        semantic = np.expand_dims(semantic, 2)
+        return semantic
 
     def get_reward_range(self) -> Tuple[float, float]:
         """This function is not used, Habitat-RLEnv requires this function"""
         return 0.0, 1.0
 
-    def get_reward(self, observations: Observations) -> float:
+    def get_reward(self, observations: Observations = None) -> float:
         """Return a dense reward based on distance to goal
 
         Args:
@@ -263,7 +254,7 @@ class ObjNavEnv(RLEnv):
 
         reward = (
             self.prev_distance - self.curr_distance
-        ) * self.full_config.agent.intrinsic_reward_coeff
+        ) * self.full_config.agent.intrinsic_reward_coef
 
         self.prev_distance = self.curr_distance
         return reward
@@ -286,7 +277,7 @@ class ObjNavEnv(RLEnv):
         return success, spl, dist
 
     def get_done(self, observations: Observations) -> bool:
-        if self.info["time"] >= self.config.env.max_episode_length - 1:
+        if self.timestep >= self.full_config.environment.max_episode_steps - 1:
             done = True
         elif self.stopped:
             done = True
