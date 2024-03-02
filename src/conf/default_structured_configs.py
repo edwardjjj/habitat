@@ -4,6 +4,7 @@ from typing import Any
 
 from hydra.core.config_store import ConfigStore
 
+from habitat.config.default import register_configs
 from habitat.config.default_structured_configs import HabitatConfig
 
 
@@ -18,6 +19,7 @@ class AgentType(Enum):
 class AgentConfig:
     """base agent config"""
 
+    agent_gpu_id: int = 0
     eval: int = 0
     num_training_frames: int = 10_000_000
     num_eval_episodes: int = 400
@@ -59,6 +61,7 @@ class SemMapConfig:
     exp_pred_threshold: float = 1.0
     collision_threshold: float = 0.10
     use_gt_sem: bool = False
+    sem_pred_prob_threshold: float = 0.5
 
 
 @dataclass
@@ -69,7 +72,7 @@ class EnvConfig:
     frame_width: int = 640
     frame_height_downscale: int = 120
     frame_width_downscale: int = 160
-    max_episode_length: int = 500
+    max_episode_steps: int = 500
     camera_height_meter: float = 0.88
     field_of_view: float = 79.0
     turn_angle: int = 30
@@ -112,6 +115,8 @@ cs.store(
 )
 cs.store(
     group="sem_map",
-    name="base_sem_map",
+    name="base_eem_map",
     node=SemMapConfig,
 )
+# register habitat default configs before hydra.main
+register_configs()
