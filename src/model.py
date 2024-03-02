@@ -1,14 +1,25 @@
+from __future__ import annotations
+
+from typing import Dict, List, Sequence
+
+import detectron2.data.transforms as T
 import numpy as np
 import torch
 import torch.nn as nn
+from detectron2 import model_zoo
+from detectron2.checkpoint import DetectionCheckpointer
+from detectron2.config import CfgNode, get_cfg
+from detectron2.data import MetadataCatalog
+from detectron2.modeling import build_model
+from detectron2.structures import Instances
+from omegaconf import DictConfig
 from torch import Tensor
 from torch.nn import functional as F
 
-import image_processing.depth_utils as du
+import utils.depth_utils as du
 
 
 class Semantic_Mapping(nn.Module):
-
     """
     Semantic_Mapping
     """
@@ -354,3 +365,85 @@ def get_new_pose_batch(pose, rel_pose_change):
     pose[:, 2] = torch.fmod(pose[:, 2] + 180.0, 360.0) - 180.0
 
     return pose
+
+
+class SemanticPredMaskRCNN:
+    predictor: BatchPredictor
+    config: DictConfig
+    model_config: CfgNode
+    resizer: T.ResizeShortestEdge
+    input_format: str
+
+    """Semantic segmentation class using MaskRCNN under the hood
+
+       This class expects input as a list of BGR images of type ndarray
+       with the shape [H x W x C]
+
+
+    """
+
+    def __init__(self, config: DictConfig):
+        model_config = SemanticPredMaskRCNN.setup_sem_model_config(config)
+        self.predictor = BatchPredictor(model_config)
+        self.config = config
+        self.model_config = model_config
+        self.resizer = T.ResizeShortestEdge(
+            [model_config.INPUT.MIN_SIZE_TEST, model_config.INPUT.MIN_SIZE_TEST],
+            model_config.INPUT.MAX_SIZE_TEST,
+        )
+        self.input_format = self.model_config.INPUT.FORMAT
+        assert self.input_format in ["RGB", "BGR"], self.input_format
+
+    def __call__(self, image_list: Sequence[np.ndarray]) -> Sequence[Instances]:
+        return self.predictor(self._preprocess_image(image_list))
+
+    @staticmethod
+    def setup_sem_model_config(config: DictConfig) -> CfgNode:
+        model_config = get_cfg()
+        file_path = config.path.maskrcnn_config
+        model_config.merge_from_file(model_zoo.get_config_file(file_path))
+        model_config.MODEL.ROI_HEADS.SCORE_THRESH_TEST = (
+            config.sem_map.sem_pred_prob_threshold
+        )
+        model_config.MODEL.RETINANET.SCORE_THRESH_TEST = (
+            config.sem_map.sem_pred_prob_threshold
+        )
+        model_config.MODEL.PANOPTIC_FPN.COMBINE.INSTANCES_CONFIDENCE_THRESH = (
+            config.sem_map.sem_pred_prob_threshold
+        )
+        model_config.MODEL.DEVICE = "cuda:{}".format(config.general.segmentation_gpu_id)
+        model_config.MODEL.WEIGHTS = config.path.maskrcnn_weights
+        return model_config
+
+    def _preprocess_image(self, image_list: Sequence[np.ndarray]) -> List[Dict]:
+        data_list = []
+        for image in image_list:
+            # image = self._resize_shortest_edge(image)
+            if self.input_format == "RGB":
+                image = image[:, :, ::-1]
+            height, width = image.shape[:2]
+            image = image.astype(np.float32).transpose(2, 0, 1)
+            image = torch.as_tensor(image)
+            data = {"image": image, "height": height, "width": width}
+            data_list.append(data)
+        return data_list
+
+    def _resize_shortest_edge(self, image: np.ndarray) -> np.ndarray:
+        return self.resizer.get_transform(image).apply_image(image)
+
+
+class BatchPredictor:
+    def __init__(self, config: CfgNode) -> None:
+        self.config = config.clone()
+        self.model = build_model(self.config)
+        self.model.eval()
+        self.metadata = MetadataCatalog.get(self.config.DATASETS.TEST[0])
+
+        checkpointer = DetectionCheckpointer(self.model)
+        checkpointer.load(self.config.MODEL.WEIGHTS)
+
+    def __call__(self, data_list: List[Dict]) -> List[Instances]:
+        with torch.no_grad():
+            predictions = self.model(data_list)
+
+        return predictions

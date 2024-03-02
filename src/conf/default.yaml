@@ -17,6 +17,7 @@ general:
   segmentation_gpu_id: 0
 
 agent:
+  agent_gpu_id: 0
   eval: 1
   num_training_frames: 10_000_000
   num_eval_episodes: 400
@@ -57,7 +58,8 @@ sem_map:
 path:
   model: ""
   task_config: "env/habitat/config/tasks"
-
+  maskrcnn_config: "COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml"
+  maskrcnn_weights: "detectron2://COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x/137849600/model_final_f10217.pkl"
 visualize:
   visualize: False
   print_images: False
