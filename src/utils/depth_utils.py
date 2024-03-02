@@ -22,7 +22,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
-import rotation_utils as ru
+from . import rotation_utils as ru
 
 
 def get_camera_matrix(width: int, height: int, fov: int) -> Namespace:
@@ -71,7 +71,7 @@ def transform_camera_view(XYZ, sensor_height, camera_elevation_degree):
         XYZ : ...x3
     """
     R = ru.get_r_matrix(
-        np.asarray([1.0, 0.0, 0.0]), angle=np.deg2rad(camera_elevation_degree)
+        np.asarray([1.0, 0.0, 0.0]), rotation_angle=np.deg2rad(camera_elevation_degree)
     )
     XYZ = np.matmul(XYZ.reshape(-1, 3), R.T).reshape(XYZ.shape)
     XYZ[..., 2] = XYZ[..., 2] + sensor_height
@@ -89,7 +89,7 @@ def transform_pose(XYZ, current_pose):
         XYZ : ...x3
     """
     R = ru.get_r_matrix(
-        np.asarray([0.0, 0.0, 1.0]), angle=current_pose[2] - np.pi / 2.0
+        np.asarray([0.0, 0.0, 1.0]), rotation_angle=current_pose[2] - np.pi / 2.0
     )
     XYZ = np.matmul(XYZ.reshape(-1, 3), R.T).reshape(XYZ.shape)
     XYZ[:, :, 0] = XYZ[:, :, 0] + current_pose[0]
