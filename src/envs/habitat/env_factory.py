@@ -1,5 +1,15 @@
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Protocol, Sequence, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+)
 
 import numpy as np
 import torch
@@ -8,8 +18,6 @@ from omegaconf import DictConfig
 from habitat.core.vector_env import VectorEnv
 from habitat.datasets.object_nav.object_nav_dataset import ObjectNavDatasetV1
 from habitat.datasets.registration import make_dataset
-
-from .objnav_env import ObjNavEnv
 
 
 class CustomEnv(Protocol):
