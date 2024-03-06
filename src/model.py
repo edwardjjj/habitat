@@ -1,22 +1,44 @@
 from __future__ import annotations
 
-from typing import Dict, List, Sequence
+from typing import TYPE_CHECKING, Dict, List, Sequence, cast
 
 import detectron2.data.transforms as T
 import numpy as np
 import torch
 import torch.nn as nn
 from detectron2 import model_zoo
+from detectron2.config import get_cfg
+
+if TYPE_CHECKING:
+    from detectron2.config import CfgNode
+    from detectron2.structures import Instances
+    from omegaconf import DictConfig
+
 from detectron2.checkpoint import DetectionCheckpointer
-from detectron2.config import CfgNode, get_cfg
 from detectron2.data import MetadataCatalog
 from detectron2.modeling import build_model
-from detectron2.structures import Instances
-from omegaconf import DictConfig
 from torch import Tensor
 from torch.nn import functional as F
 
 import utils.depth_utils as du
+
+coco_categories_mapping = {
+    56: 0,  # chair
+    57: 1,  # couch
+    58: 2,  # potted plant
+    59: 3,  # bed
+    61: 4,  # toilet
+    62: 5,  # tv
+    60: 6,  # dining-table
+    69: 7,  # oven
+    71: 8,  # sink
+    72: 9,  # refrigerator
+    73: 10,  # book
+    74: 11,  # clock
+    75: 12,  # vase
+    41: 13,  # cup
+    39: 14,  # bottle
+}
 
 
 class Semantic_Mapping(nn.Module):
@@ -91,6 +113,19 @@ class Semantic_Mapping(nn.Module):
         poses_last: Tensor,
         eve_angle: np.ndarray,
     ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        """foward pass on semantic map module
+
+        Args:
+            obs: [Batch x Channel x H x W] 0 - 3: rgbd, 4 - 19: semantic categories
+            pose_obs: [Batch x (x, y, rotation)] agent current pose
+            maps_last: [Batch x Chanel x M x M] 0: obstacle, 1: explored,
+                        2 - 3: agent loc, 4 - 19: semantic categories
+            poses_last: [Batch x (x, y, rotation)] agent pose from last step
+            eve_angle: [Batch x elevation angle] camera elevation angle
+
+        Returns:
+            [TODO:return]
+        """
         bs, c, h, w = obs.size()
         depth = obs[:, 3, :, :]
 
@@ -116,7 +151,7 @@ class Semantic_Mapping(nn.Module):
         XYZ_cm_std = agent_view_centered_t.float()
         XYZ_cm_std[..., :2] = XYZ_cm_std[..., :2] / xy_resolution
         XYZ_cm_std[..., :2] = (
-            (XYZ_cm_std[..., :2] - vision_range // 2.0) / vision_range * 2.0
+            (XYZ_cm_std[..., :2] - vision_range // 2.0) / vision_range * 2.10
         )
         XYZ_cm_std[..., 2] = XYZ_cm_std[..., 2] / z_resolution
         XYZ_cm_std[..., 2] = (
@@ -140,6 +175,7 @@ class Semantic_Mapping(nn.Module):
 
         # ----------------------------------------------------------------------
         # Project voxel grids onto 2D grids to create Maps
+        # Channel information: 0 obstacle, 1 explored, 2 - 3 agent loc, 4 - 19 sem categories
         # ----------------------------------------------------------------------
         min_z = int(25 / z_resolution - min_h)
         max_z = int((self.agent_height + 50) / z_resolution - min_h)
@@ -209,7 +245,7 @@ class Semantic_Mapping(nn.Module):
         # ----------------------------------------------------------------------
         # Create a binary mask when explored map value is large and obstacle map
         # value is small, so that when the camera elevation angle is 0, the masked
-        # value on hte obstacle map is set to 0
+        # value on the obstacle map is set to 0
         # ----------------------------------------------------------------------
         diff_ob_ex = translated[:, 1:2, :, :] - self.max_pool(translated[:, 0:1, :, :])
 
@@ -334,8 +370,8 @@ def get_grid(pose: Tensor, grid_size: torch.Size, device: torch.device):
     )
     theta2 = torch.stack([theta21, theta22], 1)
 
-    rot_grid = F.affine_grid(theta1, grid_size)
-    trans_grid = F.affine_grid(theta2, grid_size)
+    rot_grid = F.affine_grid(theta1, cast(list[int], grid_size))
+    trans_grid = F.affine_grid(theta2, cast(list[int], grid_size))
 
     return rot_grid, trans_grid
 
@@ -369,8 +405,8 @@ def get_new_pose_batch(pose, rel_pose_change):
 
 class SemanticPredMaskRCNN:
     predictor: BatchPredictor
-    config: DictConfig
-    model_config: CfgNode
+    config: "DictConfig"
+    model_config: "CfgNode"
     resizer: T.ResizeShortestEdge
     input_format: str
 
@@ -382,7 +418,7 @@ class SemanticPredMaskRCNN:
 
     """
 
-    def __init__(self, config: DictConfig):
+    def __init__(self, config: "DictConfig"):
         model_config = SemanticPredMaskRCNN.setup_sem_model_config(config)
         self.predictor = BatchPredictor(model_config)
         self.config = config
@@ -394,11 +430,38 @@ class SemanticPredMaskRCNN:
         self.input_format = self.model_config.INPUT.FORMAT
         assert self.input_format in ["RGB", "BGR"], self.input_format
 
-    def __call__(self, image_list: Sequence[np.ndarray]) -> Sequence[Instances]:
-        return self.predictor(self._preprocess_image(image_list))
+    def __call__(
+        self, image_list: Sequence[np.ndarray], resize: bool = False
+    ) -> Sequence[np.ndarray]:
+        prediction_list = self.predictor(self._preprocess_image(image_list, resize))
+        return self.get_sem_label(prediction_list)
+
+    def get_raw_result(
+        self, image_list: Sequence[np.ndarray], resize: bool = False
+    ) -> Sequence[Dict[str, "Instances"]]:
+        return self.predictor(self._preprocess_image(image_list, resize))
+
+    def get_sem_label(
+        self, prediction_list: Sequence[Dict[str, "Instances"]]
+    ) -> Sequence[np.ndarray]:
+        sem_label_list = []
+        for prediction in prediction_list:
+            height, width = prediction["instances"].image_size
+            sem_label = np.zeros((height, width, 16))
+
+            pred_classes = prediction["instances"].pred_classes.cpu().numpy()
+            pred_masks = prediction["instances"].pred_masks.cpu().numpy()
+            if len(pred_classes) > 0:
+                for j, coco_class_label in enumerate(pred_classes):
+                    if coco_class_label in coco_categories_mapping.keys():
+                        sem_label_index = coco_categories_mapping[coco_class_label]
+                        sem_label[pred_masks[j], sem_label_index] = 1
+            sem_label_list.append(sem_label)
+
+        return sem_label_list
 
     @staticmethod
-    def setup_sem_model_config(config: DictConfig) -> CfgNode:
+    def setup_sem_model_config(config: "DictConfig") -> "CfgNode":
         model_config = get_cfg()
         file_path = config.path.maskrcnn_config
         model_config.merge_from_file(model_zoo.get_config_file(file_path))
@@ -415,10 +478,13 @@ class SemanticPredMaskRCNN:
         model_config.MODEL.WEIGHTS = config.path.maskrcnn_weights
         return model_config
 
-    def _preprocess_image(self, image_list: Sequence[np.ndarray]) -> List[Dict]:
+    def _preprocess_image(
+        self, image_list: Sequence[np.ndarray], resize: bool
+    ) -> List[Dict]:
         data_list = []
         for image in image_list:
-            # image = self._resize_shortest_edge(image)
+            if resize:
+                image = self._resize_shortest_edge(image)
             if self.input_format == "RGB":
                 image = image[:, :, ::-1]
             height, width = image.shape[:2]
@@ -433,7 +499,7 @@ class SemanticPredMaskRCNN:
 
 
 class BatchPredictor:
-    def __init__(self, config: CfgNode) -> None:
+    def __init__(self, config: "CfgNode") -> None:
         self.config = config.clone()
         self.model = build_model(self.config)
         self.model.eval()
@@ -442,7 +508,7 @@ class BatchPredictor:
         checkpointer = DetectionCheckpointer(self.model)
         checkpointer.load(self.config.MODEL.WEIGHTS)
 
-    def __call__(self, data_list: List[Dict]) -> List[Instances]:
+    def __call__(self, data_list: List[Dict]) -> List[Dict[str, "Instances"]]:
         with torch.no_grad():
             predictions = self.model(data_list)
 
