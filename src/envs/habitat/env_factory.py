@@ -55,6 +55,22 @@ class VectorEnvWrapper:
         results = self.vec_env.call(commands)
         return results
 
+    def call_at(
+        self,
+        index: int,
+        function_name: str,
+        function_args: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        r"""Calls a function or retrieves a property/member variable (which is passed by name)
+        on the selected env and returns the result.
+
+        :param index: which env to call the function on.
+        :param function_name: the name of the function to call or property to retrieve on the env.
+        :param function_args: optional function args.
+        :return: result of calling the function.
+        """
+        return self.vec_env.call_at(index, function_name, function_args)
+
     def close(self):
         return self.vec_env.close()
 
