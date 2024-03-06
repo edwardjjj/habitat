@@ -318,6 +318,30 @@ class ObjNavEnv(RLEnv):
         self.last_pose = curr_sim_pose
         return dx, dy, do
 
+    def get_topdown_map_from_sim(
+        self,
+        map_resolution: int = 1024,
+        draw_border: bool = True,
+        meters_per_pixel: Optional[float] = None,
+        agent_id: int = 0,
+    ) -> np.ndarray:
+        sim = cast("HabitatSim", self.habitat_env.sim)
+        if meters_per_pixel:
+            return get_topdown_map_from_sim(
+                sim=sim,
+                map_resolution=map_resolution,
+                draw_border=draw_border,
+                meters_per_pixel=meters_per_pixel,
+                agent_id=agent_id,
+            )
+        else:
+            return get_topdown_map_from_sim(
+                sim=sim,
+                map_resolution=map_resolution,
+                draw_border=draw_border,
+                agent_id=agent_id,
+            )
+
 
 def get_l2_distance(x1: float, x2: float, y1: float, y2: float) -> float:
     """
