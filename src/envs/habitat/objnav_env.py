@@ -1,16 +1,20 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, cast
 
 import numpy as np
 import quaternion
 from omegaconf import DictConfig
 
-from habitat.core.dataset import Dataset, Episode
 from habitat.core.env import RLEnv
-from habitat.core.simulator import Observations
+
+if TYPE_CHECKING:
+    from habitat.core.simulator import Observations
+    from habitat.sims.habitat_simulator.habitat_simulator import HabitatSim
+    from habitat.core.dataset import Dataset, Episode
+
+from habitat.utils.visualizations.maps import get_topdown_map, get_topdown_map_from_sim
 
 target_category_to_id = [0, 3, 2, 4, 5, 1]
 target_id_to_category = ["chair", "bed", "plant", "toilet", "tv_monitor", "sofa"]
@@ -77,7 +81,7 @@ class ObjNavEnv(RLEnv):
         self.timestep = 0
         self.stopped = False
         self.path_length = 1e-5
-        self.last_sim_location = (0, 0, 0)
+        self.last_pose = (0, 0, 0)
         self.info = {
             "timestep": 0,
             "sensor_pose": np.zeros(3),
@@ -121,7 +125,8 @@ class ObjNavEnv(RLEnv):
 
         # if new_scene:
         observations = super().reset()
-        self.scene = self.habitat_env.sim.semantic_annotations()
+        observations = cast("Observations", observations)
+        self.scene = cast("HabitatSim", self.habitat_env.sim).semantic_annotations()
         # start_height = self._env.current_episode.start_position[1]
         # goal_height = self.scene.objects[self._env.current_episode.info['closest_goal_object_id']].aabb.center[1]
 
@@ -160,7 +165,7 @@ class ObjNavEnv(RLEnv):
         np_observations = np.concatenate((rgb, depth, semantic), axis=2).transpose(
             2, 0, 1
         )
-        self.last_sim_location = self.get_agent_pose()
+        self.last_pose = self.get_agent_pose()
 
         # Set info
         # self.info.timestep = self.timestep
@@ -241,7 +246,7 @@ class ObjNavEnv(RLEnv):
         """This function is not used, Habitat-RLEnv requires this function"""
         return 0.0, 1.0
 
-    def get_reward(self, observations: Observations = None) -> float:
+    def get_reward(self, observations: "Observations") -> float:
         """Return a dense reward based on distance to goal
 
         Args:
@@ -276,7 +281,7 @@ class ObjNavEnv(RLEnv):
         spl = min(success * self.starting_distance / self.path_length, 1)
         return success, spl, dist
 
-    def get_done(self, observations: Observations) -> bool:
+    def get_done(self, observations: "Observations") -> bool:
         if self.timestep >= self.full_config.environment.max_episode_steps - 1:
             done = True
         elif self.stopped:
@@ -285,13 +290,15 @@ class ObjNavEnv(RLEnv):
             done = False
         return done
 
-    def get_info(self, observations: Observations) -> Dict[str, Any]:
+    def get_info(self, observations: "Observations") -> Dict[str, Any]:
         return self.info
 
     def get_agent_pose(self) -> Tuple[float, float, float]:
         """Returns x, y, o pose of the agent in the Habitat simulator."""
 
-        agent_state = self.habitat_env.sim.get_agent_state(agent_id=0)
+        agent_state = cast("HabitatSim", self.habitat_env.sim).get_agent_state(
+            agent_id=0
+        )
         x = -agent_state.position[2]
         y = -agent_state.position[0]
         axis = quaternion.as_euler_angles(agent_state.rotation)[0]
@@ -307,7 +314,7 @@ class ObjNavEnv(RLEnv):
         """Returns dx, dy, do pose change of the agent relative to the last
         timestep."""
         curr_sim_pose = self.get_agent_pose()
-        dx, dy, do = get_rel_pose_change(curr_sim_pose, self.last_sim_location)
+        dx, dy, do = get_rel_pose_change(curr_sim_pose, self.last_pose)
         self.last_pose = curr_sim_pose
         return dx, dy, do
 
